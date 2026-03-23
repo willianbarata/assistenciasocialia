@@ -1,0 +1,135 @@
+generator client {
+  provider      = "prisma-client-js"
+  binaryTargets = ["native", "debian-openssl-3.0.x"]
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id                 String    @id
+  email              String    @unique
+  password           String
+  name               String?
+  role               String    @default("USER")
+  plan               String    @default("FREE")
+  creditsUsed        Int       @default(0)
+  isActive           Boolean   @default(true)
+  asaasCustomerId    String?
+  subscriptionId     String?
+  subscriptionStatus String?
+  validUntil         DateTime?
+  createdAt          DateTime  @default(now())
+  updatedAt          DateTime
+  cpf                String?
+  Video              Video[]
+}
+
+model Video {
+  id        String   @id
+  title     String?
+  url       String?
+  status    String   @default("PENDING")
+  createdAt DateTime @default(now())
+  userId    String
+  User      User     @relation(fields: [userId], references: [id])
+}
+
+// Social Assistencia Tables
+
+enum SocialRole {
+  ADMIN
+  FINANCEIRO
+  ESTOQUE
+}
+
+model SocialUser {
+  id        String   @id @default(cuid())
+  name      String
+  email     String   @unique
+  password  String
+  role      SocialRole @default(ESTOQUE)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  financialEntries FinancialEntry[]
+  financialExits   FinancialExit[]
+  stockMovements   StockMovement[]
+}
+
+model FinancialEntry {
+  id            String   @id @default(cuid())
+  amount        Decimal
+  type          String   // Doação, Oferta, Repasse, etc.
+  paymentMethod String   // Dinheiro, PIX, Transferência
+  date          DateTime @default(now())
+  description   String?
+  responsibleId String
+  responsible   SocialUser @relation(fields: [responsibleId], references: [id])
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model FinancialExit {
+  id            String   @id @default(cuid())
+  amount        Decimal
+  category      String   // Alimentos, Higiene, Transporte, etc.
+  paymentMethod String
+  date          DateTime @default(now())
+  description   String?
+  proofUrl      String?  // URL to image/pdf
+  responsibleId String
+  responsible   SocialUser @relation(fields: [responsibleId], references: [id])
+
+  stockMovements StockMovement[] // Relation for "Purchase -> Stock Entry"
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model Product {
+  id          String   @id @default(cuid())
+  name        String
+  category    String   // Arroz, Feijão, etc.
+  unit        String   // kg, un, pct
+  minStock    Int      @default(0)
+  currentStock Int     @default(0) // Denormalized for easier querying, updated via logic
+  
+  movements   StockMovement[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+enum MovementType {
+  IN
+  OUT
+}
+
+model StockMovement {
+  id             String       @id @default(cuid())
+  productId      String
+  product        Product      @relation(fields: [productId], references: [id])
+  
+  type           MovementType
+  quantity       Int
+  date           DateTime     @default(now())
+  
+  expirationDate DateTime?    // Only relevant for IN
+  batch          String?      // Optional batch code
+  
+  reason         String?      // Doação, Compra, Distribuição, Perda
+  
+  responsibleId  String
+  responsible    SocialUser   @relation(fields: [responsibleId], references: [id])
+  
+  // Link to financial exit if this was a purchase
+  financialExitId String?
+  financialExit   FinancialExit? @relation(fields: [financialExitId], references: [id])
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
