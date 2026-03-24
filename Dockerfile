@@ -7,19 +7,19 @@ RUN apk add --no-cache libc6-compat openssl
 
 WORKDIR /app
 
-
 ############################################
 # Dependencies
 ############################################
 FROM base AS deps
 
-COPY package.json package-lock.json* ./
+COPY package.json yarn.lock* package-lock.json* pnpm-lock.yaml* ./
 
 RUN \
-  if [ -f package-lock.json ]; then npm ci; \
+  if [ -f yarn.lock ]; then yarn --frozen-lockfile; \
+  elif [ -f package-lock.json ]; then npm ci; \
+  elif [ -f pnpm-lock.yaml ]; then corepack enable pnpm && pnpm i --frozen-lockfile; \
   else echo "Lockfile not found." && exit 1; \
   fi
-
 
 ############################################
 # Builder
@@ -28,15 +28,20 @@ FROM base AS builder
 
 WORKDIR /app
 
+# Copia dependências
 COPY --from=deps /app/node_modules ./node_modules
 COPY . .
 
-# Prisma Client
+# Gera Prisma Client (uma única vez)
 RUN npx prisma generate
 
-ENV NEXT_TELEMETRY_DISABLED=1
-RUN npm run build
-
+# Build Next.js standalone
+RUN \
+  if [ -f yarn.lock ]; then yarn run build; \
+  elif [ -f package-lock.json ]; then npm run build; \
+  elif [ -f pnpm-lock.yaml ]; then corepack enable pnpm && pnpm run build; \
+  else echo "Lockfile not found." && exit 1; \
+  fi
 
 ############################################
 # Runner (produção)
@@ -50,6 +55,7 @@ ENV NEXT_TELEMETRY_DISABLED=1
 ENV PORT=3000
 ENV HOSTNAME=0.0.0.0
 
+# Apenas o necessário em runtime (openssl é necessário para o Prisma Client em alpine)
 RUN apk add --no-cache openssl
 
 # Usuário não-root
@@ -59,23 +65,25 @@ RUN addgroup --system --gid 1001 nodejs \
 # Arquivos públicos
 COPY --from=builder /app/public ./public
 
-# Diretórios usados pelo Next
-RUN mkdir -p .next \
- && chown -R nextjs:nodejs .next public
+# Diretórios que o Next usa
+RUN mkdir -p public/videos .next \
+ && chown -R nextjs:nodejs public .next
 
-# Next standalone
+# Next standalone output
 COPY --from=builder --chown=nextjs:nodejs /app/.next/standalone ./
 COPY --from=builder --chown=nextjs:nodejs /app/.next/static ./.next/static
 
-# Prisma schema
+# (Opcional) Copiar schema do Prisma - Mantido apenas por segurança, 
+# mas o client já está embutido no standalone
 COPY --from=builder --chown=nextjs:nodejs /app/prisma ./prisma
 
-# Prisma CLI fixada (evita breaking change)
-RUN npm install -g prisma@5.22.0
+# Se você REALMENTE precisa do entrypoint.sh para variáveis de ambiente, mantenha as próximas 3 linhas.
+# Caso contrário, pode deletar o arquivo do seu projeto e remover estas linhas:
+# COPY --chown=nextjs:nodejs entrypoint.sh ./entrypoint.sh
+# RUN chmod +x entrypoint.sh
+# ENTRYPOINT ["./entrypoint.sh"]
 
 USER nextjs
 
-# Em produção:
-# - aplica schema no banco
-# - sobe o Next
-CMD ["/bin/sh", "-c", "npx prisma db push --accept-data-loss && node server.js"]
+# Inicia apenas a aplicação, sem mexer no banco
+CMD ["node", "server.js"]
